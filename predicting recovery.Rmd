@@ -1,0 +1,415 @@
+---
+title: "predicting recovery"
+author: "Payton Wiscovitch"
+date: "2023-04-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## reading in my files
+```{r}
+setwd("C:/Users/plw40/OneDrive/Documents/Spring23_School/INFX512/Project")
+physiological <- read.csv("phys_cycles.csv", header = TRUE, sep = ",")
+```
+
+## fixing dates
+```{r}
+library(lubridate)
+physiological$cstart <- mdy_hm(physiological$cstart)
+physiological$cend <- mdy_hm(physiological$cend)
+physiological$sleepstart <- mdy_hm(physiological$sleepstart)
+physiological$wake <- mdy_hm(physiological$wake)
+
+## converting recovery color to factor variable
+physiological$color <- as.factor(physiological$color)
+```
+
+## Simple Linear Regression Recovery and HRV
+```{r}
+set.seed(123)
+sampleset <- sample(x=nrow(physiological), size=0.7*nrow(physiological))
+phys.train <- physiological[sampleset, ]
+phys.test <- physiological[-sampleset, ]
+dim(phys.train)
+dim(phys.test)
+```
+```{r}
+simplelm <- lm(recovery~hrv, data=phys.train)
+summary(simplelm)
+```
+```{r}
+plot(recovery~hrv, data=physiological, col="seagreen3", pch=20)
+abline(simplelm, col="steelblue")
+```
+## Calculating MSPE (mean squared prediction error) aka test error
+```{r}
+simple.pred <- predict(simplelm, phys.test)
+simple.mse <- mean((simple.pred - phys.test$recovery)^2)
+simple.mse
+```
+## Multiple Linear Regression using Best Subset and K-folds Cross Validation
+```{r}
+phys.numeric <- physiological[, c(3,5:10,13, 14, 17:20,22,23)] 
+## creating an dataset with only numeric data removing asleep, sleep need, and in bed because they are used to calculate other variables and are redundant
+set.seed(321)
+multilm.sample <- sample(x=nrow(phys.numeric), size=0.7*nrow(phys.numeric)) ##creating training and test set
+mlm.train <- phys.numeric[multilm.sample, ]
+mlm.test <- phys.numeric[-multilm.sample, ]
+lm.fit <- lm(recovery~., data=mlm.train) ## taking a look at the full model
+summary(lm.fit)
+```
+
+##test error of basic multiple regression model
+```{r}
+lm.pred <- predict(lm.fit, mlm.test)
+lm.mse <- mean((lm.pred - mlm.test$recovery)^2)
+lm.mse
+```
+##best subset on training and test sets
+```{r}
+library(leaps)
+train <- mlm.train
+test <- mlm.test
+regfit.best <- regsubsets(recovery ~ ., data=train, nvmax=14)
+test.mat <- model.matrix(recovery ~ ., data=test)
+val.errors <- rep(NA, 14)
+for (i in 1:14) {
+  coefi <- coef(regfit.best, id = i)
+  pred <- test.mat[,names(coefi)] %*% coefi
+  val.errors[i] <- mean((test$recovery - pred)^2)
+}
+val.errors
+```
+```{r}
+which.min(val.errors)
+```
+```{r}
+coef(regfit.best, 4)
+```
+##best subset full
+```{r}
+regfit.best <- regsubsets(recovery ~ ., data=phys.numeric, nvmax=14)
+coef(regfit.best, 4)
+```
+##best subset using k-fold cross validation
+```{r}
+##creating a prediction function
+predict.regsubsets <- function (object , newdata , id, ...) {
+  form <- as.formula (object$call[[2]])
+  mat <- model.matrix (form , newdata)
+  coefi <- coef (object , id = id)
+  xvars <- names (coefi)
+  mat[, xvars] %*% coefi
+}
+```
+
+
+```{r}
+## k=10 and creating a matrix for storing results
+k <- 10
+n <- nrow(phys.numeric)
+set.seed(1)
+folds <- sample(rep(1:k, length=n))
+cv.errors <- matrix(NA, k, 14,
+    dimnames = list(NULL, paste(1:14)))
+```
+
+```{r}
+## writing for loop to perform cross validation
+for (j in 1:k) {
+  best.fit <- regsubsets(recovery ~ ., 
+      data=phys.numeric[folds != j, ],
+      nvmax = 14)
+  for (i in 1:14) {
+    pred <- predict(best.fit, phys.numeric[folds == j, ], id = i)
+    cv.errors[j, i] <- 
+      mean((phys.numeric$recovery[folds == j] - pred)^2)
+  }
+}
+```
+
+```{r}
+## retrieving the mse of each cross validation approach and plotting
+mean.cv.errors <- apply(cv.errors, 2, mean)
+mean.cv.errors
+```
+```{r}
+plot(mean.cv.errors, type="b", pch=20, col="steelblue")
+```
+```{r}
+reg.best <- regsubsets(recovery~., data=phys.numeric, nvmax=14)
+coef(reg.best, 4)
+```
+## Ridge Regression
+```{r}
+x.train <- model.matrix(recovery~., data=train)[ ,-1]
+y.train <- train$recovery
+x.test <- model.matrix(recovery~., data=test)[ ,-1]
+y.test <- test$recovery
+ridge.mod <- glmnet(x.train, y.train, alpha=0, lambda=seq(0.1, 1, by=0.1))
+cv.out <- cv.glmnet(x.train, y.train, alpha=0)
+best.lambda <- cv.out$lambda.min
+best.lambda
+```
+```{r}
+ridge.pred <- predict(ridge.mod, s=best.lambda, newx = x.test)
+rr.mse <- mean((ridge.pred-y.test)^2)
+rr.mse
+```
+## Lasso
+```{r}
+lasso.mod <- glmnet(x.train, y.train, alpha=1, lambda=seq(0.1, 1, by=0.1))
+cv.lasso <- cv.glmnet(x.train, y.train, alpha=1)
+bestlam <- cv.lasso$lambda.min
+bestlam
+```
+```{r}
+lasso.pred <- predict(lasso.mod, s=bestlam, newx = x.test)
+lasso.mse <- mean((lasso.pred - y.test)^2)
+lasso.mse
+```
+## Multiple Linear Regression with 4 Variables
+```{r}
+lm4 <- lm(recovery ~ rhr + hrv + sleepscore + resprate, data=train)
+summary(lm4)
+```
+## Calculating Test Error of LM with 4 variables
+```{r}
+lm4.pred <- predict(lm4, test)
+lm4.mse <- mean(lm4.pred)
+lm4.mse
+```
+## Predicting High Recovery using Logistic Regression
+```{r}
+phys.logistic <- phys.numeric
+phys.logistic$recovery <- ifelse(phys.logistic$recovery >= 67, 1, 0)
+head(phys.logistic)
+```
+## Creating train and test sets for validation
+```{r}
+set.seed(23)
+logistic.sample <- sample(x=nrow(phys.logistic), size=0.7*nrow(phys.logistic))
+log.train <- phys.logistic[logistic.sample, ]
+log.test <- phys.logistic[-logistic.sample, ]
+dim(log.train)
+dim(log.test)
+```
+## Running full logistic regression model
+```{r}
+glm.fit <- glm(recovery ~ ., data=log.train, family = "binomial")
+summary(glm.fit)
+```
+
+```{r}
+library(MASS)
+lda.fit <- lda(recovery ~ ., data=log.train)
+lda.fit
+```
+```{r}
+plot(lda.fit)
+```
+```{r}
+lda.pred <- predict(lda.fit, log.test)
+lda.class <- lda.pred$class
+table(lda.class, log.test$recovery)
+```
+```{r}
+mean(lda.class == log.test$recovery)
+```
+```{r}
+lda.fit2 <- lda(recovery ~ rhr + hrv + sleepscore + resprate, data=log.train)
+lda.fit2
+```
+```{r}
+plot(lda.fit2)
+```
+
+```{r}
+lda.pred2 <- predict(lda.fit2, log.test)
+lda.class2 <- lda.pred2$class
+table(lda.class2, log.test$recovery)
+```
+```{r}
+mean(lda.class2 == log.test$recovery)
+```
+```{r}
+lda.fit3 <- lda(recovery ~ hrv + resprate, data=log.train)
+lda.fit3
+```
+
+```{r}
+plot(lda.fit3)
+```
+```{r}
+lda.pred3 <- predict(lda.fit3, log.test)
+lda.class3 <- lda.pred3$class
+table(lda.class3, log.test$recovery)
+```
+```{r}
+mean(lda.class3 == log.test$recovery)
+```
+## polynomial regression
+```{r}
+#preparing to run the model
+df.shuffled <- phys.numeric[sample(nrow(phys.numeric)), ]
+k <- 10
+degree <- 5
+folds <- cut(seq(1,nrow(df.shuffled)), breaks=k, labels=FALSE)
+mse <- matrix(data=NA, nrow=k, ncol=degree)
+```
+
+## Performing k-fold cross validation
+```{r}
+for(i in 1:k) {
+  
+  #define training and test data
+  test.index <- which(folds==i, arr.ind=TRUE)
+  test.data <- df.shuffled[test.index, ]
+  train.data <- df.shuffled[-test.index, ]
+  
+  #use k-fold cv to evaluate models
+  for (j in 1:degree){
+    fit.train = lm(recovery ~ poly(rhr, j) + poly(hrv, j) + poly(sleepscore, j) + poly(resprate, j), data=train.data)
+    fit.test = predict(fit.train, newdata=test.data)
+    mse[i,j] = mean((fit.test-test.data$recovery)^2)
+  }
+}
+
+#find mse for each degree
+colMeans(mse)
+```
+```{r}
+plot((colMeans(mse)))
+```
+# VAR vector autoregression for time series data
+```{r}
+#loading required packages
+library(urca)
+library(vars)
+library(mFilter)
+library(tseries)
+library(forecast)
+library(tidyverse)
+```
+
+#Declare Time Series Variables
+```{r}
+recovery <- ts(physiological$recovery, start= c(2020, 4, 1), frequency=365)
+hrv <- ts(physiological$hrv, start= c(2020, 4, 1), frequency=365)
+rhr <- ts(physiological$rhr, start= c(2020, 4, 1), frequency=365)
+sleepscore <- ts(physiological$sleepscore, start= c(2020, 4, 1), frequency=365)
+resprate <- ts(physiological$resprate, start= c(2020, 4, 1), frequency=365)
+```
+
+#Plot The variables
+```{r}
+autoplot(cbind(recovery, hrv))
+```
+```{r}
+autoplot(cbind(recovery, rhr))
+```
+```{r}
+autoplot(cbind(recovery, sleepscore))
+```
+```{r}
+autoplot(cbind(recovery, resprate))
+```
+#Determine the Persistence of the Model
+```{r}
+acf(recovery, main="ACF for Recovery")
+```
+```{r}
+pacf(recovery, main="PACF for Recovery")
+```
+```{r}
+acf(hrv, main="ACF for HRV")
+```
+```{r}
+pacf(hrv, main="PACF for HRV")
+```
+# Finding optimal lags
+```{r}
+recovery.bv <- cbind(recovery, hrv, rhr, sleepscore, resprate)
+colnames(recovery.bv) <- cbind("recovery", "HRV", "RHR", "Sleep_Score", "Respiratory_Rate")
+
+lagselect <- VARselect(recovery.bv, lag.max = 10, type="const")
+lagselect$selection
+```
+#Building VAR
+```{r}
+Modelrecovery1 <- VAR(recovery.bv, p=1, type="const", season=NULL, exog=NULL)
+summary(Modelrecovery1)
+```
+
+#Diagnosing the VAR
+
+#Serial Correlation
+```{r}
+serial1 <- serial.test(Modelrecovery1, lags.pt=12, type="PT.asymptotic")
+serial1
+```
+this model fails the serial correlation test because it has a p-value < .05
+
+#heteroscedasticity
+```{r}
+arch1 <- arch.test(Modelrecovery1, lags.multi = 12, multivariate.only = TRUE)
+arch1
+```
+#normal distribution of the residuals
+```{r}
+norm1 <- normality.test(Modelrecovery1, multivariate.only = TRUE)
+norm1
+```
+this model also fails the normality test as all the p-values are < .05
+
+#Testing for structural breaks in the residuals
+```{r}
+stability1 <- stability(Modelrecovery1, type= "OLS-CUSUM")
+plot(stability1)
+```
+The model is not stable as there are multiple instances where there are structural breaks
+
+#Granger Causality
+
+```{r}
+grangerrecovery1 <- causality(Modelrecovery1, cause = "recovery")
+grangerrecovery1
+```
+```{r}
+grangerall1 <- causality(Modelrecovery1, cause=c("HRV", "RHR", "Sleep_Score", "Respiratory_Rate"))
+grangerall1
+```
+#Impulse Response Functions
+```{r}
+recoveryirf <- irf(Modelrecovery1, impulse = "HRV", response= "recovery", n.ahead=10, boot=TRUE)
+plot(recoveryirf, ylab="Recovery", main="Shock from HRV")
+```
+#rsq for multiple linear regression model with 4 variables
+```{r}
+r2.best <- 1-(lm4.mse/var(test$recovery))
+r2.best
+```
+

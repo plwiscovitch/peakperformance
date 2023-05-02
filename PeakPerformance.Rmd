@@ -1,0 +1,531 @@
+---
+title: "Peak Performance: A Fitness Tracker Data Exploration"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+Loading in the Data
+
+```{r}
+setwd("C:/Users/plw40/OneDrive/Documents/Spring23_School/INFX512/Project")
+physiological <- read.csv("phys_cycles.csv", header = TRUE, sep = ",")
+sleeps <- read.csv("sleeps_1year.csv", header = TRUE, sep = ",")
+workouts <- read.csv("workouts_1year.csv", header = TRUE, sep = ",")
+journal <- read.csv("journal.csv", header = TRUE, sep = ",")
+```
+
+Structure of the Datasets
+
+```{r}
+str(physiological)
+str(sleeps)
+str(workouts)
+str(journal)
+```
+
+As you can see by the str() structure of the dataframes, I will need to convert the date and time variables to a date-time data type. I will also need to convert the type for the "color" variable from character to a factor with labels.
+
+```{r}
+install.packages("lubridate")
+library(lubridate)
+##converting character to datetime using lubridate
+physiological$cstart <- mdy_hm(physiological$cstart)
+physiological$cend <- mdy_hm(physiological$cend)
+physiological$sleepstart <- mdy_hm(physiological$sleepstart)
+physiological$wake <- mdy_hm(physiological$wake)
+sleeps$cstart <- mdy_hm(sleeps$cstart)
+sleeps$cend <- mdy_hm(sleeps$cend)
+sleeps$sleeponset <- mdy_hm(sleeps$sleeponset)
+sleeps$wakeonset <- mdy_hm(sleeps$wakeonset)
+workouts$cstart <- mdy_hm(workouts$cstart)
+workouts$cend <- mdy_hm(workouts$cend)
+workouts$workoutstart <- mdy_hm(workouts$workoutstart)
+workouts$workoutend <- mdy_hm(workouts$workoutend)
+journal$cstart <- mdy_hm(journal$cstart)
+journal$cend <- mdy_hm(journal$cend)
+
+##converting physiological recovery "color" to factor
+physiological$color <- as.factor(physiological$color)
+str(physiological$color)
+```
+
+Now that the data is correctly categorized, I want to take a quick look at the summary statistics for each of the datasets.
+
+```{r}
+library(tidyverse)
+summary(physiological)
+summary(sleeps)
+summary(workouts)
+summary(journal)
+```
+Let's take a quick look at all of the physiological based on recovery grouping.
+
+```{r}
+group <- NA
+group[physiological$recovery <= 33] <- 1
+group[physiological$recovery >= 34 & physiological$recovery <= 66] <- 2
+group[physiological$recovery >= 67] <- 3
+
+pairs(physiological[ ,c(3,5:10,13,14)],
+      col= c("red","yellow","green")[group],
+      pch= c(15, 16, 17)[group],
+      main = "Plot of Variables by Recovery Score Grouping")
+```
+Based on the scatterplots, I can see that when RHR (resting heart rate) is high, I seem to have low/red recovery days. When RHR is low, I have more high/green recovery days. HRV (heart rate variability), offers very distinct groupings. High HRV is associated with high/green recovery, mid-range HRV is associated with yellow/medium recovery, and low HRV is associated with low/red recovery. Daystrain, Calories, and MaxHR have positive linearity. Respiratory rate x HRV offers the most distinct groupings. I'd say based on a quick glance of this high-level overview that RHR, HRV, and Respiratory Rate will likely be good prediction variables when we get to predictive modeling. 
+---
+Let's get a closer look at some of the variables in direct relation to Recovery Score. 
+
+```{r}
+library(ggplot2)
+recovery.rhr <- ggplot(data=physiological) +
+  geom_point(mapping=aes(rhr, recovery, color = color))+
+  scale_color_manual(name = "Recovery Score", values= c("red"="red",
+                               "yellow"="yellow",
+                               "green"="green")) +
+  labs(title="Recovery and RHR")
+recovery.rhr
+```
+When taking a closer look at Recovery and RHR we can see that a RHR of >= 65 results in a low/red recovery score.There appears to be a negative linear relationship between the two variables. 
+
+```{r}
+recovery.hrv <- ggplot(data=physiological) +
+  geom_point(mapping=aes(hrv, recovery, color = color))+
+  scale_color_manual(name = "Recovery Score", values= c("red"="red",
+                               "yellow"="yellow",
+                               "green"="green")) +
+  labs(title="Recovery and HRV")
+recovery.hrv
+```
+HRV and Recovery appear to have an obvious positive linear relationship. As HRV increases, so does Recovery.
+```{r}
+cor(physiological$recovery, physiological$hrv)
+```
+```{r}
+recovery.rhr <- ggplot(data=physiological) +
+  geom_point(mapping=aes(rhr, recovery, color = color))+
+  scale_color_manual(name = "Recovery Score", values= c("red"="red",
+                               "yellow"="yellow",
+                               "green"="green")) +
+  labs(title="Recovery and RHR")
+recovery.rhr
+```
+```{r}
+cor(physiological$recovery, physiological$rhr)
+```
+
+
+
+```{r}
+recovery.sleep <- ggplot(data=physiological) +
+  geom_point(mapping=aes(sleepscore, recovery, color = color))+
+  scale_color_manual(name = "Recovery Score", values= c("red"="red",
+                               "yellow"="yellow",
+                               "green"="green")) +
+  labs(title="Recovery and Sleep Score")
+recovery.sleep
+```
+There is no linear relationship between Sleep and Recovery. However, these two variables will need further investigation to understand how they relate to one another. 
+```{r}
+cor(physiological$sleepscore, physiological$recovery)
+```
+
+
+```{r}
+recovery.resprate <- ggplot(data=physiological) +
+  geom_point(mapping=aes(resprate, recovery, color = color))+
+  scale_color_manual(name = "Recovery Score", values= c("red"="red",
+                               "yellow"="yellow",
+                               "green"="green")) +
+  labs(title="Recovery and Respiratory Rate")
+recovery.resprate
+```
+```{r}
+cor(physiological$recovery, physiological$resprate)
+```
+
+I'd like to see my recovery scores displayed by their color indicator over the span of this year of data. I will first make a dataframe with just the relevant information.
+```{r}
+##create new dateframe for daily recovery
+dailyrecovery = data.frame(
+  date=as.Date(physiological$cstart),
+  recovery= as.integer(physiological$recovery),
+  color= as.character(physiological$color))
+
+library(dplyr)
+##creating a dummy variable representing the 3 levels of recovery 0=red recovery days, 50=yellow recovery days, and 100=green recovery days
+dailyrecovery <- dailyrecovery %>% 
+  mutate(recovery_level = case_when(
+    recovery <= 33~0, 
+    recovery >= 34 & recovery <=66 ~50, 
+    recovery >= 67 ~ 100))
+head(dailyrecovery) 
+```
+```{r}
+library(calendR)
+recovery_scores <- calendR(start_date = "2020-04-01",
+                           end_date = "2021-03-31",
+                           start= "M",
+                           title= "My Daily Recovery",
+                           special.days = dailyrecovery$recovery_level,
+                           special.col= "green",
+                           gradient=TRUE,
+                           low.col="red",
+                           weeknames = c("S","M","T","W","T","F","S"),
+                           day.size = 1.8,
+                           font.style = "bold"
+                           )
+plot(recovery_scores)
+```
+```{r}
+table(physiological$color)
+```
+
+In order to create this calendar, I first created a dataframe containing the information about my recovery by the day. I then had to create a dummy column with 3 distinct values to work in correlation with the color of the recovery that day. Since recovery is coded as red, yellow, and green I used the values 0,50,100 in my dummy variable to correlate to red=low where recovery is <=33, yellow=moderate where recovery is between 34 and 66, and green=high where recovery is >=67. I then plot this on a calendar using the calendR package. The result is a calendar representing my recovery score color for each day over the year of data. Here, it is easy to see that I had very few low recovery (red) days in this year. We will look more into the contributing factors to these days later on. 
+
+---
+```{r}
+pairs(sleeps[,5:12],
+      col="dodgerblue3",
+      pch= 20,
+      main = "Sleep Data Plots")
+```
+See positive linear relationships among Sleep Score and time: spent asleep, in bed, light sleep, deep sleep, and REM sleep. 
+
+```{r}
+plot(sleeps$cstart,
+     sleeps$lightsleep,
+     type= "l",
+     col= "lightblue",
+     xlab= c("Months"),
+     ylab= c("Minutes"),
+     main= "Sleep Cycles")
+lines(sleeps$cstart,
+      sleeps$deepsleep,
+      type= "l",
+      col= "midnightblue")
+lines(sleeps$cstart,
+      sleeps$rem,
+      type="l",
+      col="dodgerblue")
+legend("topright",
+       c("light sleep","deep sleep", "REM sleep"),
+       lty = 1,
+       col= c("lightblue", "midnightblue", "dodgerblue"))
+```
+Based on this it is easy to see that I spend the least amount of time in deep sleep and on average more time in light sleep than any other sleep cycle. 
+
+```{r}
+avg.light <- mean(sleeps$lightsleep)
+avg.deep <- mean(sleeps$deepsleep)
+avg.rem <- mean(sleeps$rem)
+avg.awake <- mean(sleeps$awake)
+avg.total <- avg.awake+avg.deep+avg.light+avg.rem
+
+cycles <- data.frame(
+  category=c("light", "deep", "REM", "awake"),
+  time=c(avg.light, avg.deep, avg.rem, avg.awake))
+
+cycles$fraction <- cycles$time / avg.total
+cycles$fraction <- round(cycles$fraction, digits = 2)
+
+pie(cycles$fraction, main="Sleep Cycles", 
+    labels=c("light 40%", "deep 19%", "REM 33%", "awake 8%"),
+    col=c("lightblue", "midnightblue", "dodgerblue", "red"))
+```
+```{r}
+ggplot(sleeps) +
+  geom_bar(aes(x=cstart, y=asleep), stat="identity", fill="lightblue", color="lightblue") +
+  geom_line(aes(x=cstart, y=sleepneed), stat="identity", color="orange") +
+              labs(title="Sleep Performance", x="Months", y="Minutes")
+  
+```
+```{r}
+ggplot(sleeps) +
+  geom_bar(aes(x=cstart, y=inbed), stat="identity", fill="orange") +
+  geom_bar(aes(x=cstart, y=asleep), stat="identity", fill="lightblue") +
+  labs(title="Sleep Efficiency", x="Months", y="Minutes")
+```
+
+
+```{r}
+ggplot(workouts, aes(x=activity)) + 
+  geom_bar(color="darkorange", fill="darkorange")+
+  labs(x= "Activity", y= "Count", title= "Types of Workouts")+
+  theme(axis.text.x = element_text(angle = 90))
+  
+```
+```{r}
+avg.strain <- aggregate(activitystrain~activity, data=workouts, FUN=mean)
+avg.strain$activitystrain <- round(avg.strain$activitystrain, digits= 1)
+ggplot(avg.strain, aes(x=activity, y=activitystrain)) +
+  geom_bar(stat="identity", fill="lightblue") +
+  labs(title="Avg. Activity Strain by Activity Type", x="Activity Type", y="Average Strain") +
+  geom_text(aes(label=activitystrain), vjust= 1) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+```{r}
+hrz.activity <- read.csv("hrzactivity.csv", header = TRUE, sep = ",")
+```
+
+```{r}
+ggplot(hrz.activity, aes(fill=group, y=value, x=activity)) + 
+  geom_bar(position="fill", stat="identity") +
+  theme(axis.text.x = element_text(angle = 90),panel.background = element_blank()) +
+  labs(title="HRZ by Activity") +
+  scale_fill_manual(values=c('grey90', 'grey70', 'steelblue', 'seagreen3','sandybrown','orangered'))
+```
+
+
+Recovery v Day Strain v Sleep v HRV
+```{r}
+plot(physiological$cstart,
+     physiological$recovery,
+     type= "l",
+     col= "forestgreen",
+     xlab= c("Months"),
+     ylab= c("Value"),
+     main= "Key Metrics Over Time")
+lines(physiological$cstart,
+      physiological$sleepscore,
+      type= "l",
+      col= "midnightblue")
+lines(physiological$cstart,
+      physiological$hrv,
+      type="l",
+      col="mediumpurple")
+legend("topright",
+       c("Recovery Score","Sleep Score", "HRV"),
+       lty = 1,
+       col= c("forestgreen", "midnightblue", "mediumpurple"))
+```
+```{r}
+summary(physiological$hrv)
+```
+```{r}
+summary(physiological$rhr)
+```
+
+```{r}
+summary(physiological$sleepscore)
+```
+```{r}
+summary(physiological$resprate)
+```
+```{r}
+summary(sleeps$sleepneed)
+```
+```{r}
+summary(sleeps$sleepdebt)
+```
+```{r}
+summary(sleeps$efficiency)
+```
+```{r}
+summary(sleeps$inbed)
+```
+
+
+```{r}
+summary(sleeps$asleep)
+```
+```{r}
+summary(workouts$duration)
+```
+```{r}
+##creating a red day data frame
+attach(physiological)
+red.days <- physiological[which(recovery <= 33),]
+detach(physiological)
+head(red.days)
+```
+summary stats on red days
+```{r}
+summary(red.days[ ,c(3:10, 13:23)])
+```
+red workout days
+
+
+Red Day Journals
+```{r}
+red.journal <- merge(red.dates, journal, by = "cstart")
+str(red.journal)
+```
+
+
+High Green dataframe
+
+```{r}
+##creating high green data frame
+attach(physiological)
+high.green <- physiological[which(recovery >= 90),]
+detach(physiological)
+high.dates <- as.data.frame(high.green[,1])
+colnames(high.dates)[1] = "cstart"
+high.dates
+```
+```{r}
+summary(high.green[ ,c(3:10, 13:23)])
+```
+high green workouts
+```{r}
+
+head(high.workouts)
+```
+
+High Green Journal Entries
+```{r}
+high.journal <- merge(high.dates, journal, by= "cstart")
+str(high.journal)
+```
+overall phys stats
+```{r}
+summary(physiological[ ,c(3:10, 13:23)])
+```
+reading in physiological comparison .csv
+```{r}
+##average physiological stat comparison chart for visualization
+physavg.comparison <- read.csv("physiologicalcomparison.csv", header = TRUE, sep = ",")
+head(physavg.comparison)
+```
+Visualizing differences red, high, overall
+```{r}
+physavg.1 <- physavg.comparison[c(1,2,6,7,12,14,17,18,19,23,24,29,31,34,35,36,40,41,46,48,51), ]
+physavg.2 <- physavg.comparison[c(3,8,16,20,25,33,37,42,50), ]
+physavg.3 <- physavg.comparison[c(5,11,13,22,28,30,39,45,47), ]
+physavg.4 <- physavg.comparison[c(9,10,15,26,27,32,43,44,49), ]
+physavg.5 <- physavg.comparison[c(4,21,38), ]
+```
+
+
+```{r}
+ggplot(physavg.1, aes(fill=group, y=value, x=group)) + 
+  geom_bar(position="dodge", stat="identity") +
+  theme(panel.background = element_blank()) +
+  labs(title="Average Physiological Metrics Comparison 1", x="metric") +
+  scale_fill_manual(values=c('seagreen3', 'steelblue', 'orangered')) +
+  facet_wrap(~stat)
+```
+group 2
+```{r}
+ggplot(physavg.2, aes(fill=group, y=value, x=stat)) + 
+  geom_bar(position="dodge", stat="identity") +
+  theme(panel.background = element_blank()) +
+  labs(title="Average Physiological Metrics Comparison 2", x="metric") +
+  scale_fill_manual(values=c('seagreen3', 'steelblue', 'orangered'))
+```
+group 3
+```{r}
+ggplot(physavg.3, aes(fill=group, y=value, x=stat)) + 
+  geom_bar(position="dodge", stat="identity") +
+  theme(panel.background = element_blank()) +
+  labs(title="Average Physiological Metrics Comparison 3", x="metric") +
+  scale_fill_manual(values=c('seagreen3', 'steelblue', 'orangered'))
+```
+comparison 4
+```{r}
+ggplot(physavg.4, aes(fill=group, y=value, x=stat)) + 
+  geom_bar(position="dodge", stat="identity") +
+  theme(panel.background = element_blank()) +
+  labs(title="Average Physiological Metrics Comparison 4", x="metric") +
+  scale_fill_manual(values=c('seagreen3', 'steelblue', 'orangered'))
+```
+comparison 5
+```{r}
+ggplot(physavg.5, aes(fill=group, y=value, x=stat)) + 
+  geom_bar(position="dodge", stat="identity") +
+  theme(panel.background = element_blank()) +
+  labs(title="Average Physiological Metrics Comparison 5", x="metric") +
+  scale_fill_manual(values=c('seagreen3', 'steelblue', 'orangered'))
+```
+
+
+```{r}
+phys.numeric <- physiological[ ,c(3, 5:10, 13:23)]
+head(phys.numeric)
+```
+
+
+```{r}
+library(ggcorrplot)
+phys.cor <- cor(phys.numeric) 
+cor.plot <- ggcorrplot(phys.cor, hc.order = TRUE, type="lower", lab=TRUE) +
+  labs(title="Correlation of Physiological Variables")
+cor.plot
+```
+
+exploring workouts for high and low days
+```{r}
+high.workouts <- merge(high.dates, workouts, by = "cstart")
+high.workouts <- high.workouts[ , -2:-4] ##removing redundant dates
+## adding recovery score to the df
+df.high <- merge(high.workouts, high.green[ ,c("cstart","recovery")], by="cstart", all.x=TRUE)
+df.high <- df.high[ ,c("cstart", "recovery", "duration", "activity", "activitystrain", "calories", "maxhr", "avghr", "hrz1", "hrz2", "hrz3", "hrz4", "hrz5")]
+high.workouts <- df.high
+head(high.workouts)
+```
+```{r}
+high.workouts$cstart <- as.character(high.workouts$cstart)
+ggplot(high.workouts, aes(x=cstart)) +
+  geom_bar(fill="seagreen3")+
+  theme(axis.text.x = element_text(angle = 90),panel.background = element_blank()) +
+  labs(title="# of Activities per Day", x="date")
+```
+```{r}
+attach(high.workouts)
+strain.day <- aggregate(activitystrain~cstart, data=high.workouts, FUN=sum)
+ggplot(strain.day, aes(x=cstart, y=activitystrain)) +
+  geom_bar(stat="identity", fill="orangered")+
+  theme(axis.text.x = element_text(angle = 90),panel.background = element_blank()) +
+  labs(title="Total Activity Strain by Day", x="date")
+```
+
+
+exploring workout data for red days
+
+```{r}
+red.dates <- as.data.frame(red.days[,1])
+colnames(red.dates)[1] ="cstart"
+red.workouts <- merge(red.dates, workouts, by="cstart")
+red.workouts <- red.workouts[,-2:-4] ##removing redundant dates
+red.workouts <- merge(red.workouts, red.days[ ,c("cstart", "recovery")], by="cstart", all.x=TRUE)
+red.workouts <- red.workouts[ ,c("cstart", "recovery", "duration", "activity", "activitystrain", "calories", "maxhr", "avghr", "hrz1", "hrz2", "hrz3", "hrz4", "hrz5")]
+head(red.workouts)
+```
+```
+```{r}
+red.journal <- red.journal[,-2]
+high.journal <- high.journal[,-2]
+```
+---
+```{r}
+ggplot(data= red.journal, aes(x=question, y=answeredyes, fill=answeredyes)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  labs(title="Journal Entries for Red Days", fill="Response") +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank()) +
+  scale_fill_manual(values=c("orangered","steelblue"))
+```
+---
+```{r}
+ggplot(data= high.journal, aes(x=question, y=answeredyes, fill=answeredyes)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  labs(title="Journal Entries for High Green Days", fill="Response") +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank()) +
+  scale_fill_manual(values=c("orangered","steelblue"))
+```
+
+##predictive modeling: simple linear regression
+```{r}
+## Splitting the data
+set.seed(1)
+sample.set <- sample(x=nrow(phys.numeric), size=0.7*nrow(phys.numeric))
+slm.train <- phys.numeric[sample.set, ]
+slm.test <- phys.numeric[-sample.set, ]
+
+## Running simple linear regression
+simplelm <- lm(recovery~hrv, data=slm.train)
+summary(simplelm)
+```
+
